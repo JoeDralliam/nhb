@@ -2,31 +2,36 @@ open Lwt
 open Lwt_unix
 module Irc = Irc_client_lwt.Client
 
-let debug = false
+let debug = true
 
 let server = "ulminfo.fr"
 let port = 3724
 
-let realname = "Nethack Bot, 3rd Edition, Version 0.577"
-let nick = "nhb"
+let realname =
+  if debug
+  then "Nethack Bot, Debug Edition, Version 0.423"
+  else "Nethack Bot, 3rd Edition, Version 0.577"
+
+let nick =
+  if debug
+  then "nhbd"
+  else "nhb"
 let username = nick
+
 let channel =
   if debug
   then "#test"
   else "#ulminfo"
-let target = 
-  if debug 
+
+let target =
+  if debug
   then "Ctl-Maj-5cfb"
   else channel
 
-let rec increasing_diff oldL newL =
-  match (oldL, newL) with
-  | ([], l2) -> l2
-  | (h1 :: q1, h2 :: q2) ->
-     if h1 = h2
-     then increasing_diff q1 q2
-     else h2 :: increasing_diff oldL q2
-  | (_ :: _, []) -> (Printf.fprintf Pervasives.stderr "New log file lacks some lines" ; [])
+let nethack_file =
+  if debug
+  then "/var/games/nethack/logfile"
+  else "/usr/local/util/packages/nethack/share/logfile"
 
 
 let unwrap b =
@@ -37,21 +42,18 @@ let unwrap b =
 
 
 let watch_file file callback =
-  Lwt_io.with_file ~mode:Lwt_io.Input file
-  (fun channel ->
-  (Lwt_io.read_lines channel |> Lwt_stream.to_list)
-  >>= fun lines -> return (Lwt_mvar.create lines))
-  >>= fun lines ->
-  let rec loop () =
+  Lwt_io.file_length file
+  >>= fun position ->
+  let rec loop position =
     sleep 5.0
     >>= fun () -> Lwt_io.with_file ~mode:Lwt_io.Input file
 	(fun channel ->
-	 Lwt_io.read_lines channel |> Lwt_stream.to_list
-	 >>= fun nLines ->  Lwt_mvar.take lines
-	 >>= fun oLines -> Lwt_mvar.put lines nLines
-	 >>= fun () -> Lwt_list.iter_s callback (increasing_diff oLines nLines))
+	 Lwt_io.set_position channel position
+	 >>= fun () -> Lwt_io.read_lines channel |> Lwt_stream.to_list
+	 >>= fun nLines -> Lwt_list.iter_s callback nLines
+	 >>= fun () -> Lwt_io.length channel)
     >>= loop
-  in loop ()
+  in loop position
 
 
 let send_message connection line =
@@ -83,9 +85,9 @@ let lwt_main =
   Irc.connect_by_name ~server ~port ~username ~mode:0 ~realname ~nick ()
   >>= fun connection -> return (unwrap connection)
   >>= fun connection -> return (Lwt_daemon.daemonize ())
-  >>= fun () -> sleep 10.0
+  >>= fun () -> sleep 20.0
   >>= fun () -> Irc.send_join ~connection ~channel
-  >>= fun () -> join [watch_file "/usr/local/util/packages/nethack/share/logfile" (send_message connection) ;
+  >>= fun () -> join [watch_file nethack_file (send_message connection) ;
 		      ping_server connection ()]
 
 let _ = Lwt_main.run lwt_main
