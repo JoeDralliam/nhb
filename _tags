@@ -1,1 +1,1 @@
-<nhb.*> : package(irc-client.lwt)
+<nhb.*> : package(irc-client.lwt), package(inotify.lwt)

@@ -2,6 +2,8 @@ open Lwt
 open Lwt_unix
 module Irc = Irc_client_lwt.Client
 
+exception Quit
+
 let debug = true
 
 let server = "ulminfo.fr"
@@ -43,10 +45,12 @@ let unwrap b =
 
 let watch_file file callback =
   Lwt_io.file_length file
-  >>= fun position ->
+  >>= fun position -> Lwt_inotify.create ()
+  >>= fun inotify -> Lwt_inotify.add_watch inotify file [Inotify.S_Close_write]
+  >>= fun watch ->
   let rec loop position =
-    sleep 5.0
-    >>= fun () -> Lwt_io.with_file ~mode:Lwt_io.Input file
+    Lwt_inotify.read inotify
+    >>= fun _ -> Lwt_io.with_file ~mode:Lwt_io.Input file
 	(fun channel ->
 	 Lwt_io.set_position channel position
 	 >>= fun () -> Lwt_io.read_lines channel |> Lwt_stream.to_list
@@ -77,8 +81,17 @@ let send_message connection line =
   in
   Irc.send_privmsg ~connection ~target ~message
 
+
 let ping_server connection () =
-  Irc.listen ~connection ~callback:(fun ~connection ~result -> return ())
+  let open Irc_message in
+  let t () =
+    Irc.listen ~connection ~callback:(
+		 fun ~connection ~result ->
+		 match result with
+		 | Message { trail = Some msg ; _ } when msg = nick ^ ": #quit" -> fail Quit
+		 | _ -> return ()
+	       )
+  in catch t (fun _ -> return ())
 
 
 let lwt_main =
@@ -87,7 +100,8 @@ let lwt_main =
   >>= fun connection -> return (Lwt_daemon.daemonize ())
   >>= fun () -> sleep 20.0
   >>= fun () -> Irc.send_join ~connection ~channel
-  >>= fun () -> join [watch_file nethack_file (send_message connection) ;
-		      ping_server connection ()]
+  >>= fun () -> choose [watch_file nethack_file (send_message connection) ;
+			ping_server connection ()]
+  >>= fun () -> Irc.send_quit ~connection
 
 let _ = Lwt_main.run lwt_main
